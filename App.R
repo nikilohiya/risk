@@ -33,6 +33,8 @@ library(nloptr)
 library(MASS)
 library(robustbase)
 library(shinythemes)
+library(ggplot2)
+library(TTR)
 
 
 ui <- fluidPage(theme = shinytheme("lumen"),
@@ -51,8 +53,8 @@ ui <- fluidPage(theme = shinytheme("lumen"),
   # Sidebar with a slider input for number of bins 
   sidebarLayout(
     sidebarPanel(
-      textInput("symbol","Enter the stock symbol",value = toupper("CL MSFT DDD MMM WBAI WUBA AAPL WFC")),
-      dateInput("startDate","Enter the starting Date",value = "2015-01-01",format = "yyyy-mm-dd"),
+      textInput("symbol","Enter the stock symbol",value = toupper("CL MSFT MMM WBAI AAPL WFC")),
+      dateInput("startDate","Enter the starting Date",value = "2017-01-01",format = "yyyy-mm-dd"),
       dateInput("lastDate","Enter the Ending Date",value = "2018-01-01",format = "yyyy-mm-dd"),
       # checkboxInput("network","Network Analysis",value = FALSE),
       # checkboxInput("Garch","GARCH Analysis",value = FALSE),
@@ -163,7 +165,11 @@ ui <- fluidPage(theme = shinytheme("lumen"),
         br(),
         h6("References"),
         p("The application has solely been created for academic purposes only.")
-        )
+        ),
+      tabPanel(
+        "Monte Carlo",
+        plotOutput("mcplot1")
+      )
       )
       )
   ),
@@ -280,14 +286,113 @@ server <- function(input, output) ({
     return(meanvar.ef)
   }
   
-  shar <- function(input,output){
-    maxSR.lo.ROI <- optimize.portfolio(R=df(), portfolio=port_spec(), 
-                                      optimize_method="ROI",
-                                      search_size=2000,
-                                      trace=TRUE)
-    return(maxSR.lo.ROI)
-  }
 
+  
+  mcsimr <- function(ine,output){
+    
+    stats <- function(x){
+      mat <- matrix(nrow=0,ncol=2)
+      stat <- as.data.frame(mat)
+      names <- names(x)
+      for (i in 1:n()){
+        er <- x[,i]
+        mu <- mean(er)
+        sd <- sd(er)
+        delta_t <- 1/12
+        z = rnorm(10000)
+        month_returns <- mu*delta_t + sd*z*sqrt(delta_t)
+        stat[i,] <- c(mean(month_returns)*12,sd(month_returns)*sqrt(12))
+        names(stat) <- c("mean","volatility")
+      }
+      return(stat)
+    }
+    
+    a <- stats(returns())
+    b <- as.data.frame(lapply(wts(),as.numeric))
+    mean <- sum(a[,1]*b)
+    sd <- sum(a[,2]*b)
+    stats_p <- data.frame(mean,sd)
+    
+    # 5000 scenarios, for 30 years. $1000 initial investment, type is 1 if stock, 2 if bond
+    
+    bond_value <- getSymbols(Symbols = "DGS3", src="FRED", auto.assign = FALSE)
+    # days <- c(input$startDate,input$lastDate)
+    # bond_value <- bond_value[days]
+    bond_return_disc <- Return.calculate(bond_value, method = c("discrete"))[-1]
+    bond_return_disc <- bond_return_disc[-1]
+    
+    mean_brd <- mean(bond_return_disc, na.rm = TRUE)
+    sd_brd <- sd(bond_return_disc, na.rm = TRUE)
+    corr_sb <- (mean_brd*stats_p$mean)/(sd_brd*stats_p$sd)
+    
+    initialcapital<-1000;
+    
+    years<-30;
+    
+    scenarios<-5000;
+    
+    types<-2;
+    
+    sigma<-matrix(c(stats_p$sd,corr_sb,corr_sb,sd_brd),c(2,2));
+    
+    mu<-matrix(c(stats_p$mean,mean_brd),2,1);
+    
+    stockreturn<-matrix(1, scenarios,1);
+    
+    bondreturn<-matrix(1,scenarios,1);
+    
+    
+    for (ayear in 1:years)
+      
+    {
+      
+      marketreturnrate <- mvrnorm(n = 1000,mu = mu,Sigma = sigma);
+      
+      stockreturn<-stockreturn*(1+marketreturnrate[,1]); # for $1 investment
+      
+      bondreturn<-bondreturn*(1+marketreturnrate[,2]); # for $1 investment
+      
+    }
+    
+    # a portion invested in stock, the rest in bond, expressed as weights
+    
+    weightstrategies<-seq(from=0, to=1,by=0.2); # try several weights
+    
+    endof30yearcapital<-matrix(0,scenarios,length(weightstrategies));
+    
+    for (counter in range(1:6)){
+    endof30yearcapital[,counter]<-(weights)*initialcapital*stockreturn+(1-weights)*initialcapital*bondreturn;
+    }
+    return(endof30yearcapital)
+  }
+  
+  
+  
+  
+  
+  
+  # then plot histogram without default titles
+  mcsim <- function(input,output){
+    weights <- input
+    counter<-weights*5+1;
+    initialcapital<-1000;
+    endof30yearcapital <- mcsimr()
+    
+    #create a new window
+    
+    # plot.new();
+    
+    # now plot histogram, first get a list containing the structure
+    
+    histlist<-hist(endof30yearcapital[,counter],plot=FALSE)
+    
+    title(main=paste("End of 30 year capital histogram with stocks weight =",weights),
+          sub = "5000 scenarios, $1000 initial investment in stocks and bonds",
+          col.main="red", font.main=4)
+    mcplot <- hist(endof30yearcapital[,counter],breaks=histlist$breaks,col=heat.colors(length(histlist$breaks)),ann=FALSE);
+    
+    return(mcplot)
+  }
   
   
   
@@ -321,7 +426,13 @@ server <- function(input, output) ({
   
   
   # Fourth Tab Outputs
-  
+  # output$mcplot <- renderPlot(plot(mcsimr()))
+  output$mcplot1 <- renderPlot(mcsim(input = 0))
+  output$mcplot2 <- renderPlot(mcsim(weights = 0.2))
+  output$mcplot3 <- renderPlot(mcsim(weights = 0.4))
+  output$mcplot4 <- renderPlot(mcsim(weights = 0.6))
+  output$mcplot5 <- renderPlot(mcsim(weights = 0.8))
+  output$mcplot6 <- renderPlot(mcsim(weights = 1.0))
 })
 
 # Run the application 
